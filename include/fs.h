@@ -85,4 +85,10 @@ int do_write(int fd, unsigned char *text, int len, char op);
 int my_read(int fd, int pos);
 int do_read(int fd, unsigned char *text, int len);
 
+/* 公共辅助函数 */
+void fcb_init(fcb *file, const char *name, unsigned short first, unsigned char attribute);
+void useropen_init(useropen *item, unsigned short first, int dirno, const char *dir);
+int check_fd(int fd);
+int getFreeOpenlist(void);
+
 #endif
