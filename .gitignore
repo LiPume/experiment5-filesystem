@@ -1,0 +1,29 @@
+# Build outputs
+*.o
+*.out
+*.a
+*.so
+main
+
+# Debug / profiling
+*.dSYM/
+*.gch
+*.gcno
+*.gcda
+gmon.out
+
+# Generated filesystem/runtime files
+myfsys
+*.img
+*.bin
+
+# Editor / IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
