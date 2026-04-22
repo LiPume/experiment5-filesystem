@@ -57,9 +57,12 @@ void startsys(void) {
 
                 /* 根目录放入打开文件表第 0 项 */
                 curdirid = 0;
-                useropen_init(&openfilelist[curdirid], initblock.root, initblock.root, "~/");
-                memcpy(&openfilelist[curdirid].open_fcb, blockaddr[initblock.root], sizeof(fcb));
-                openfilelist[curdirid].count = 0;
+		useropen_init(&openfilelist[curdirid], initblock.root, initblock.root, "~/");
+		memcpy(&openfilelist[curdirid].open_fcb, blockaddr[initblock.root], sizeof(fcb));
+		openfilelist[curdirid].attribute = 0;
+		openfilelist[curdirid].length = 2 * sizeof(fcb);
+		openfilelist[curdirid].count = 0;
+		openfilelist[curdirid].topenfile = 1;
 
                 printf("文件系统加载成功。\n");
                 return;
@@ -146,9 +149,12 @@ void my_format(void) {
     memcpy(blockaddr[3], fat2, BLOCKNUM * sizeof(fat));
 
     curdirid = 0;
-    useropen_init(&openfilelist[curdirid], 5, 5, "~/");
+    useropen_init(&openfilelist[curdirid], 5, 5,  "~/");
     memcpy(&openfilelist[curdirid].open_fcb, &root_dot, sizeof(fcb));
+    openfilelist[curdirid].attribute = 0;
+    openfilelist[curdirid].length = 2 * sizeof(fcb);
     openfilelist[curdirid].count = 0;
+    openfilelist[curdirid].topenfile = 1;
 
     printf("格式化完成。\n");
 }
