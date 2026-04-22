@@ -68,6 +68,8 @@ void startsys(void) {
     }
 
     /* 没有旧镜像或镜像非法，则重新格式化 */
+
+    printf("创建文件系统...\n");
     my_format();
     printf("已创建新的文件系统。\n");
 }
@@ -85,6 +87,15 @@ void my_format(void) {
     int i;
     fcb root_dot, root_dotdot;
 
+    printf("请输入磁盘块大小，和数量：\n");
+    scanf("%d %d", &BLOCKSIZE, &BLOCKNUM);
+
+    if (BLOCKSIZE <= 0 || BLOCKNUM <= 0 || BLOCKSIZE * BLOCKNUM > SIZE) {
+        printf("输入非法，使用默认值 1024 1000。\n");
+        BLOCKSIZE = 1024;
+        BLOCKNUM = 1000;
+    }
+
     if (myvhard == NULL) {
         myvhard = (unsigned char *)malloc(SIZE);
         if (myvhard == NULL) {
@@ -92,6 +103,7 @@ void my_format(void) {
             exit(EXIT_FAILURE);
         }
     }
+
     memset(myvhard, 0, SIZE);
 
     for (i = 0; i < BLOCKNUM; i++) {
@@ -103,7 +115,6 @@ void my_format(void) {
         openfilelist[i].topenfile = 0;
     }
 
-    /* 初始化引导块 */
     memset(&initblock, 0, sizeof(block0));
     strcpy(initblock.information, "Simple File System");
     initblock.root = 5;
@@ -111,39 +122,35 @@ void my_format(void) {
     initblock.blocksize = BLOCKSIZE;
     initblock.blocknum = BLOCKNUM;
 
-    /* 初始化 FAT */
     for (i = 0; i < BLOCKNUM; i++) {
         fat1[i].id = FREE;
         fat2[i].id = FREE;
     }
 
-    /* 保留块：0~5 */
     for (i = 0; i <= 5; i++) {
         fat1[i].id = END;
         fat2[i].id = END;
     }
 
-    /* 根目录占用第 5 块 */
     fat1[5].id = END;
     fat2[5].id = END;
 
-    /* 初始化根目录的 "." 和 ".." */
     fcb_init(&root_dot, ".", 5, 0);
     fcb_init(&root_dotdot, "..", 5, 0);
 
     memcpy(blockaddr[5], &root_dot, sizeof(fcb));
     memcpy(blockaddr[5] + sizeof(fcb), &root_dotdot, sizeof(fcb));
 
-    /* 把引导块和 FAT 写回虚拟磁盘 */
     memcpy(blockaddr[0], &initblock, sizeof(block0));
     memcpy(blockaddr[1], fat1, BLOCKNUM * sizeof(fat));
     memcpy(blockaddr[3], fat2, BLOCKNUM * sizeof(fat));
 
-    /* 初始化当前目录为根目录 */
     curdirid = 0;
     useropen_init(&openfilelist[curdirid], 5, 5, "~/");
     memcpy(&openfilelist[curdirid].open_fcb, &root_dot, sizeof(fcb));
     openfilelist[curdirid].count = 0;
+
+    printf("格式化完成。\n");
 }
 
 /*
