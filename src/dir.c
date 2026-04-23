@@ -187,6 +187,212 @@ static void build_next_dir_path(const char *current,
     }
 }
 
+/* 目录项总数 = length / sizeof(fcb) */
+static int get_dir_entry_count(unsigned long dir_length) {
+    return (int)(dir_length / sizeof(fcb));
+}
+
+/* 每个盘块最多能放多少个 fcb */
+static int get_entries_per_block(void) {
+    if (BLOCKSIZE <= 0) {
+        return 0;
+    }
+    return BLOCKSIZE / (int)sizeof(fcb);
+}
+
+/* 在 FAT 中申请一个空闲盘块，成功返回块号，失败返回 -1 */
+static int alloc_free_block(void) {
+    int i;
+
+    for (i = 6; i < BLOCKNUM; i++) {
+        if (fat1[i].id == FREE) {
+            fat1[i].id = END;
+            fat2[i].id = END;
+            memset(blockaddr[i], 0, BLOCKSIZE);
+            return i;
+        }
+    }
+
+    return -1;
+}
+
+/* 释放从 first 开始的一条 FAT 链 */
+static void free_block_chain(unsigned short first) {
+    unsigned short cur;
+    unsigned short next;
+
+    cur = first;
+    while (cur != END && cur != FREE && cur < BLOCKNUM) {
+        next = fat1[cur].id;
+        fat1[cur].id = FREE;
+        fat2[cur].id = FREE;
+        memset(blockaddr[cur], 0, BLOCKSIZE);
+
+        if (next == END || next == FREE || next >= BLOCKNUM) {
+            break;
+        }
+        cur = next;
+    }
+}
+
+/* 向目录文件中按逻辑序号写入一个目录项，allow_expand=1 时允许目录扩容 */
+static int write_dir_entry_by_index(unsigned short dir_first, int index, const fcb *in, int allow_expand) {
+    int entries_per_block;
+    int block_skip;
+    int inner_index;
+    unsigned short blk;
+
+    if (in == NULL || index < 0 || dir_first >= BLOCKNUM || BLOCKSIZE <= 0) {
+        return -1;
+    }
+
+    entries_per_block = get_entries_per_block();
+    if (entries_per_block <= 0) {
+        return -1;
+    }
+
+    block_skip = index / entries_per_block;
+    inner_index = index % entries_per_block;
+    blk = dir_first;
+
+    while (block_skip > 0) {
+        if (blk >= BLOCKNUM || fat1[blk].id == FREE) {
+            return -1;
+        }
+
+        if (fat1[blk].id == END) {
+            int newblk;
+
+            if (!allow_expand) {
+                return -1;
+            }
+
+            newblk = alloc_free_block();
+            if (newblk < 0) {
+                return -1;
+            }
+
+            fat1[blk].id = (unsigned short)newblk;
+            fat2[blk].id = (unsigned short)newblk;
+            fat1[newblk].id = END;
+            fat2[newblk].id = END;
+        }
+
+        blk = fat1[blk].id;
+        block_skip--;
+    }
+
+    if (blk >= BLOCKNUM) {
+        return -1;
+    }
+
+    memcpy(blockaddr[blk] + inner_index * (int)sizeof(fcb), in, sizeof(fcb));
+    return 0;
+}
+
+/* 在目录中按名字查找任意目录项（文件或目录） */
+static int find_entry_in_dir(unsigned short dir_first,
+                             unsigned long dir_length,
+                             const char *name,
+                             fcb *out_entry,
+                             int *out_index) {
+    int total_entries;
+    int i;
+    fcb temp;
+    char namebuf[16];
+
+    if (name == NULL) {
+        return -1;
+    }
+
+    total_entries = get_dir_entry_count(dir_length);
+
+    for (i = 0; i < total_entries; i++) {
+        if (read_dir_entry_by_index(dir_first, i, &temp) != 0) {
+            continue;
+        }
+
+        if (!is_valid_fcb(&temp)) {
+            continue;
+        }
+
+        make_entry_name(&temp, namebuf, sizeof(namebuf));
+        if (strcmp(namebuf, name) == 0) {
+            if (out_entry != NULL) {
+                memcpy(out_entry, &temp, sizeof(fcb));
+            }
+            if (out_index != NULL) {
+                *out_index = i;
+            }
+            return 0;
+        }
+    }
+
+    return -1;
+}
+
+/* 找一个可写入的空槽位；如果没有空槽位，就返回末尾 append 位置 */
+static int find_free_slot_or_append(unsigned short dir_first,
+                                    unsigned long dir_length,
+                                    int *out_index,
+                                    int *need_append) {
+    int total_entries;
+    int i;
+    fcb temp;
+
+    if (out_index == NULL || need_append == NULL) {
+        return -1;
+    }
+
+    total_entries = get_dir_entry_count(dir_length);
+
+    for (i = 0; i < total_entries; i++) {
+        if (read_dir_entry_by_index(dir_first, i, &temp) != 0) {
+            continue;
+        }
+
+        if (!is_valid_fcb(&temp)) {
+            *out_index = i;
+            *need_append = 0;
+            return 0;
+        }
+    }
+
+    *out_index = total_entries;
+    *need_append = 1;
+    return 0;
+}
+
+/* 判断目录是否为空：只允许存在 "." 和 ".." */
+static int dir_is_empty(unsigned short dir_first, unsigned long dir_length) {
+    int total_entries;
+    int i;
+    fcb temp;
+    char namebuf[16];
+
+    total_entries = get_dir_entry_count(dir_length);
+
+    for (i = 0; i < total_entries; i++) {
+        if (read_dir_entry_by_index(dir_first, i, &temp) != 0) {
+            continue;
+        }
+
+        if (!is_valid_fcb(&temp)) {
+            continue;
+        }
+
+        make_entry_name(&temp, namebuf, sizeof(namebuf));
+
+        if (strcmp(namebuf, ".") == 0 || strcmp(namebuf, "..") == 0) {
+            continue;
+        }
+
+        return 0;
+    }
+
+    return 1;
+}
+
 void my_ls(void) {
     useropen *curdir;
     int total_entries;
@@ -311,11 +517,148 @@ void my_cd(char *dirname) {
 }
 
 void my_mkdir(char *dirname) {
-    /* TODO: 创建子目录 */
-    (void)dirname;
+    useropen *curdir;
+    fcb exist;
+    fcb newdir;
+    fcb dot;
+    fcb dotdot;
+    int newblk;
+    int slot_index;
+    int need_append;
+
+    if (dirname == NULL || dirname[0] == '\0') {
+        printf("usage: mkdir <dirname>\n");
+        return;
+    }
+
+    if (!check_fd(curdirid)) {
+        printf("当前目录状态非法。\n");
+        return;
+    }
+
+    /* 不允许创建特殊目录名 */
+    if (strcmp(dirname, ".") == 0 || strcmp(dirname, "..") == 0) {
+        printf("不能创建特殊目录 %s\n", dirname);
+        return;
+    }
+
+    /* 目录名长度限制：filename[8]，最多放 7 个字符 + '\0' */
+    if (strlen(dirname) >= sizeof(newdir.filename)) {
+        printf("目录名过长，最多 7 个字符。\n");
+        return;
+    }
+
+    curdir = &openfilelist[curdirid];
+
+    /* 同名检查：文件和目录都不能重名 */
+    if (find_entry_in_dir(curdir->first, curdir->length, dirname, &exist, NULL) == 0) {
+        printf("已存在同名文件或目录: %s\n", dirname);
+        return;
+    }
+
+    /* 申请一个新盘块作为新目录的数据块 */
+    newblk = alloc_free_block();
+    if (newblk < 0) {
+        printf("磁盘空间不足，无法创建目录。\n");
+        return;
+    }
+
+    /* 新目录自身的目录项 */
+    fcb_init(&newdir, dirname, (unsigned short)newblk, 0);
+
+    /* 初始化新目录内容：. 和 .. */
+    fcb_init(&dot, ".", (unsigned short)newblk, 0);
+    fcb_init(&dotdot, "..", curdir->first, 0);
+
+    memcpy(blockaddr[newblk], &dot, sizeof(fcb));
+    memcpy(blockaddr[newblk] + sizeof(fcb), &dotdot, sizeof(fcb));
+
+    /* 找父目录中的写入位置 */
+    if (find_free_slot_or_append(curdir->first, curdir->length, &slot_index, &need_append) != 0) {
+        free_block_chain((unsigned short)newblk);
+        printf("父目录写入失败。\n");
+        return;
+    }
+
+    /* 把新目录项写入父目录 */
+    if (write_dir_entry_by_index(curdir->first, slot_index, &newdir, 1) != 0) {
+        free_block_chain((unsigned short)newblk);
+        printf("父目录空间不足，创建失败。\n");
+        return;
+    }
+
+    /* 只有追加到目录尾时，父目录 length 才增长 */
+    if (need_append) {
+        curdir->length += sizeof(fcb);
+    }
+
+    curdir->fcbstate = 1;
+    curdir->open_fcb.length = curdir->length;
+
+    printf("目录创建成功: %s\n", dirname);
 }
 
 void my_rmdir(char *dirname) {
-    /* TODO: 删除空目录 */
-    (void)dirname;
+    useropen *curdir;
+    fcb target;
+    fcb empty_entry;
+    int index;
+
+    if (dirname == NULL || dirname[0] == '\0') {
+        printf("usage: rmdir <dirname>\n");
+        return;
+    }
+
+    if (!check_fd(curdirid)) {
+        printf("当前目录状态非法。\n");
+        return;
+    }
+
+    /* 不允许删除 . 和 .. */
+    if (strcmp(dirname, ".") == 0 || strcmp(dirname, "..") == 0) {
+        printf("不能删除特殊目录 %s\n", dirname);
+        return;
+    }
+
+    curdir = &openfilelist[curdirid];
+
+    /* 先找到该目录项 */
+    if (find_entry_in_dir(curdir->first, curdir->length, dirname, &target, &index) != 0) {
+        printf("目录不存在: %s\n", dirname);
+        return;
+    }
+
+    if (target.attribute != 0) {
+        printf("%s 不是目录，不能用 rmdir 删除。\n", dirname);
+        return;
+    }
+
+    /* 防御：不允许删当前目录本身 */
+    if (target.first == curdir->first) {
+        printf("不能删除当前目录。\n");
+        return;
+    }
+
+    /* 目录非空不能删 */
+    if (!dir_is_empty(target.first, target.length)) {
+        printf("目录非空，不能删除: %s\n", dirname);
+        return;
+    }
+
+    /* 释放目录占用的盘块链 */
+    free_block_chain(target.first);
+
+    /* 父目录中对应目录项标记为空项 */
+    memset(&empty_entry, 0, sizeof(fcb));
+    empty_entry.free = 1;
+
+    if (write_dir_entry_by_index(curdir->first, index, &empty_entry, 0) != 0) {
+        printf("删除目录项失败，但盘块已释放，请检查。\n");
+        return;
+    }
+
+    curdir->fcbstate = 1;
+    curdir->open_fcb.length = curdir->length;
+
+    printf("目录删除成功: %s\n", dirname);
 }
