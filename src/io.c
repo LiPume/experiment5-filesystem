@@ -22,6 +22,7 @@ static int get_actual_block(int first_block, int offset, int *block_offset) {
         if (next == END || next == FREE) {
             return END;
         }
+        
         cur_block = next;
     }
     return cur_block;
