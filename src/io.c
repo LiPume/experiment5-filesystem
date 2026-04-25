@@ -1,28 +1,33 @@
 #include "io.h"
 #include "fat.h"
+#include "file.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
+/* ===================== 内部辅助函数 ===================== */
 
-/* * 内部辅助函数：将文件的逻辑偏移(offset)映射为物理盘块号
- * 核心逻辑：利用队友提供的 getNextFat 沿着 FAT 链向后找
+/**
+ * 逻辑偏移转物理块号
+ * 核心逻辑：沿着队友维护的 FAT 链表跳转
  */
 static int get_actual_block(int first_block, int offset, int *block_offset) {
     int cur_block = first_block;
-    int target_index = offset / BLOCKSIZE; // 需要跳过的块数
-    *block_offset = offset % BLOCKSIZE;    // 块内偏移
+    int target_index = offset / BLOCKSIZE; 
+    *block_offset = offset % BLOCKSIZE;
 
     for (int i = 0; i < target_index; i++) {
-        if (cur_block == END || cur_block == FREE) {
+        // 调用队友的 getNextFat 获取下一跳
+        int next = getNextFat(cur_block);
+        if (next == END || next == FREE) {
             return END;
         }
-        cur_block = getNextFat(cur_block);
+        cur_block = next;
     }
     return cur_block;
 }
 
-// ==================== 读文件模块 ====================
+/* ===================== 1. 读文件模块 ===================== */
 
 int my_read(int fd, int pos) {
     if (!check_fd(fd)) {
@@ -35,19 +40,18 @@ int my_read(int fd, int pos) {
     }
 
     int len;
-    printf("请输入读取长度: ");
+    printf("请输入欲读取的字节数: ");
     if (scanf("%d", &len) != 1) return -1;
 
-    // 申请临时缓冲区
     unsigned char *text = (unsigned char *)malloc(len + 1);
     if (!text) return -1;
 
     int real_read = do_read(fd, text, len);
     if (real_read > 0) {
         text[real_read] = '\0';
-        printf("--- 读取内容 ---\n%s\n----------------\n", text);
+        printf("--- 文件内容 ---\n%s\n----------------\n", text);
     } else {
-        printf("未读取到任何内容。\n");
+        printf("读取结束或无内容。\n");
     }
 
     free(text);
@@ -58,7 +62,7 @@ int do_read(int fd, unsigned char *text, int len) {
     useropen *ptr = &openfilelist[fd];
     int read_count = 0;
 
-    // 边界检查，防止越界读
+    // 适配：使用队友在 my_open 中同步的 length
     if ((unsigned long)(ptr->count + len) > ptr->open_fcb.length) {
         len = (int)(ptr->open_fcb.length - ptr->count);
     }
@@ -80,7 +84,7 @@ int do_read(int fd, unsigned char *text, int len) {
     return read_count;
 }
 
-// ==================== 写文件模块 ====================
+/* ===================== 2. 写文件模块 ===================== */
 
 int my_write(int fd, int pos) {
     if (!check_fd(fd)) {
@@ -91,29 +95,26 @@ int my_write(int fd, int pos) {
     int op;
     printf("请选择写方式 (1:截断写, 2:覆盖写, 3:追加写): ");
     if (scanf("%d", &op) != 1) return -1;
-    getchar(); // 吸收回车，防止被接下来的 fgets 读走
+    getchar(); // 吸收回车
 
     if (op == 1) { 
-        // 截断写：利用队友的 fatFree 释放除第一块外的所有后续块
-        unsigned short next = getNextFat(openfilelist[fd].first);
-        while (next != (unsigned short)END) {
-            unsigned short temp = getNextFat(next);
-            fatFree(next);
-            next = temp;
+        // 截断写：保留首块，释放后续块
+        int next = getNextFat(openfilelist[fd].first);
+        if (next != END) {
+            fatFree(next); // 调用队友的链式释放函数
+            setFat(openfilelist[fd].first, END); // 重新封口
         }
-        fat1[openfilelist[fd].first].id = END; // 保持首块
-        fat2[openfilelist[fd].first].id = END;
         openfilelist[fd].open_fcb.length = 0;
+        openfilelist[fd].length = 0;
         openfilelist[fd].count = 0;
     } else if (op == 3) {
-        // 追加写：指针移动到文件末尾
         openfilelist[fd].count = (int)openfilelist[fd].open_fcb.length;
     } else if (pos >= 0) {
         openfilelist[fd].count = pos;
     }
 
     unsigned char buffer[SIZE];
-    printf("请输入内容 (以回车结束):\n");
+    printf("请输入待写入内容 (直接回车结束):\n");
     if (fgets((char *)buffer, SIZE, stdin) == NULL) return -1;
     
     int len = strlen((char *)buffer);
@@ -125,29 +126,28 @@ int my_write(int fd, int pos) {
 int do_write(int fd, unsigned char *text, int len, char op) {
     useropen *ptr = &openfilelist[fd];
     int write_count = 0;
-    (void)op; // 消除变量未使用警告
+    (void)op;
 
     while (len > 0) {
         int off;
         int cur_b = get_actual_block(ptr->first, ptr->count, &off);
 
-        // 如果需要新块
+        // 扩容逻辑
         if (cur_b == END) {
-            int new_b = getFreeFatid(); // 调用队友函数
+            // 调用队友的 allocBlock，它会自动找空位并标记 END
+            int new_b = allocBlock(); 
             if (new_b == -1) {
-                printf("错误：磁盘空间已满。\n");
+                printf("[IO] 错误：磁盘空间不足。\n");
                 break;
             }
             
-            // 找到链表当前末尾并挂载
+            // 查找到当前文件的链表末尾，并挂载新块
             int last = ptr->first;
-            while (getNextFat(last) != (unsigned short)END) {
+            while (getNextFat(last) != END) {
                 last = getNextFat(last);
             }
-            fat1[last].id = (unsigned short)new_b;
-            fat2[last].id = (unsigned short)new_b;
-            
-            // 初始化新块
+            setFat(last, new_b); // 关联新块
+
             cur_b = new_b;
             off = 0;
             memset(blockaddr[cur_b], 0, BLOCKSIZE);
@@ -162,12 +162,13 @@ int do_write(int fd, unsigned char *text, int len, char op) {
         write_count += chunk;
         len -= chunk;
 
-        // 更新文件实际长度
+        // 同步长度：确保 my_close 写回磁盘时大小正确
         if ((unsigned long)ptr->count > ptr->open_fcb.length) {
             ptr->open_fcb.length = (unsigned long)ptr->count;
+            ptr->length = ptr->open_fcb.length; 
         }
     }
 
-    ptr->fcbstate = 1; // 标记修改，提醒系统写回磁盘
+    ptr->fcbstate = 1; // 激活修改标志
     return write_count;
 }
