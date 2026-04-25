@@ -408,7 +408,7 @@ void my_ls(void) {
 
     curdir = &openfilelist[curdirid];
 
-    total_entries = (int)(curdir->length / sizeof(fcb));
+    total_entries = (int)(curdir->open_fcb.length / sizeof(fcb));
 
     printf("当前目录: %s\n", curdir->dir);
 
@@ -594,6 +594,19 @@ void my_mkdir(char *dirname) {
 
     curdir->fcbstate = 1;
     curdir->open_fcb.length = curdir->length;
+    /* 把当前目录自身的最新 FCB 同步到 '.' 目录项 */
+{
+    fcb self_fcb = curdir->open_fcb;
+    strcpy(self_fcb.filename, ".");
+    memcpy(blockaddr[curdir->first], &self_fcb, sizeof(fcb));
+
+    /* 如果当前目录是根目录，'..' 也指向自己，可一并同步 */
+    if (curdir->first == 5) {
+        fcb parent_fcb = curdir->open_fcb;
+        strcpy(parent_fcb.filename, "..");
+        memcpy(blockaddr[curdir->first] + sizeof(fcb), &parent_fcb, sizeof(fcb));
+    }
+}
 
     printf("目录创建成功: %s\n", dirname);
 }
