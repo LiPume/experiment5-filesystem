@@ -1,9 +1,5 @@
 #include "dir.h"
 #include "fat.h"
-/*
- * 这些辅助函数只服务目录模块，因此放在 dir.c 内部即可，
- * 不修改公共头文件，不暴露给其他模块。
- */
 
 /* 判断一个目录项是否为有效项 */
 static int is_valid_fcb(const fcb *entry) {
@@ -11,15 +7,10 @@ static int is_valid_fcb(const fcb *entry) {
         return 0;
     }
 
-    /* 显式空项/删除项 */
     if (entry->free == 1) {
         return 0;
     }
 
-    /*
-     * 兼容当前工程中目录块剩余区域被 memset 为 0 的情况：
-     * 这些全 0 槽位虽然 free 不是 1，但也不能视为有效目录项
-     */
     if (entry->filename[0] == '\0' &&
         entry->exname[0] == '\0' &&
         entry->first == 0 &&
@@ -45,11 +36,7 @@ static void make_entry_name(const fcb *entry, char *buf, size_t buflen) {
     }
 }
 
-/*
- * 从目录文件中按逻辑序号读取一个目录项
- * dir_first : 目录起始块号
- * index     : 该目录中的第 index 个 fcb（从 0 开始）
- */
+/* 从目录文件中按逻辑序号读取一个目录项 */
 static int read_dir_entry_by_index(unsigned short dir_first, int index, fcb *out) {
     int entries_per_block;
     int block_skip;
@@ -85,10 +72,7 @@ static int read_dir_entry_by_index(unsigned short dir_first, int index, fcb *out
     return 0;
 }
 
-/*
- * 在目录中查找指定名字的“子目录”
- * 这里只匹配目录 attribute == 0，避免 cd 进普通文件
- */
+/* 在目录中查找指定名字的子目录 */
 static int find_subdir_in_dir(unsigned short dir_first,
                               unsigned long dir_length,
                               const char *dirname,
@@ -104,6 +88,7 @@ static int find_subdir_in_dir(unsigned short dir_first,
     }
 
     total_entries = (int)(dir_length / sizeof(fcb));
+
     for (i = 0; i < total_entries; i++) {
         if (read_dir_entry_by_index(dir_first, i, &temp) != 0) {
             continue;
@@ -162,13 +147,11 @@ static void build_next_dir_path(const char *current,
             return;
         }
 
-        /* 去掉最后的 '/' */
         if (len > 0 && out[len - 1] == '/') {
             out[len - 1] = '\0';
             len--;
         }
 
-        /* 删除最后一级目录名 */
         while (len > 0 && out[len - 1] != '/') {
             out[len - 1] = '\0';
             len--;
@@ -200,30 +183,16 @@ static int get_entries_per_block(void) {
     return BLOCKSIZE / (int)sizeof(fcb);
 }
 
-/* 在 FAT 中申请一个空闲盘块，成功返回块号，失败返回 -1 */
-// static int alloc_free_block(void) {
-//     int i;
-
-//     for (i = 6; i < BLOCKNUM; i++) {
-//         if (fat1[i].id == FREE) {
-//             fat1[i].id = END;
-//             fat2[i].id = END;
-//             memset(blockaddr[i], 0, BLOCKSIZE);
-//             return i;
-//         }
-//     }
-
-//     return -1;
-// }
-
 /* 释放从 first 开始的一条 FAT 链 */
 static void free_block_chain(unsigned short first) {
     unsigned short cur;
     unsigned short next;
 
     cur = first;
+
     while (cur != END && cur != FREE && cur < BLOCKNUM) {
         next = fat1[cur].id;
+
         fat1[cur].id = FREE;
         fat2[cur].id = FREE;
         memset(blockaddr[cur], 0, BLOCKSIZE);
@@ -231,12 +200,16 @@ static void free_block_chain(unsigned short first) {
         if (next == END || next == FREE || next >= BLOCKNUM) {
             break;
         }
+
         cur = next;
     }
 }
 
 /* 向目录文件中按逻辑序号写入一个目录项，allow_expand=1 时允许目录扩容 */
-static int write_dir_entry_by_index(unsigned short dir_first, int index, const fcb *in, int allow_expand) {
+static int write_dir_entry_by_index(unsigned short dir_first,
+                                    int index,
+                                    const fcb *in,
+                                    int allow_expand) {
     int entries_per_block;
     int block_skip;
     int inner_index;
@@ -290,7 +263,7 @@ static int write_dir_entry_by_index(unsigned short dir_first, int index, const f
     return 0;
 }
 
-/* 在目录中按名字查找任意目录项（文件或目录） */
+/* 在目录中按名字查找任意目录项 */
 static int find_entry_in_dir(unsigned short dir_first,
                              unsigned long dir_length,
                              const char *name,
@@ -317,6 +290,7 @@ static int find_entry_in_dir(unsigned short dir_first,
         }
 
         make_entry_name(&temp, namebuf, sizeof(namebuf));
+
         if (strcmp(namebuf, name) == 0) {
             if (out_entry != NULL) {
                 memcpy(out_entry, &temp, sizeof(fcb));
@@ -331,7 +305,7 @@ static int find_entry_in_dir(unsigned short dir_first,
     return -1;
 }
 
-/* 找一个可写入的空槽位；如果没有空槽位，就返回末尾 append 位置 */
+/* 找一个可写入的空槽位；如果没有空槽位，就返回末尾追加位置 */
 static int find_free_slot_or_append(unsigned short dir_first,
                                     unsigned long dir_length,
                                     int *out_index,
@@ -422,11 +396,13 @@ void my_ls(void) {
         }
 
         make_entry_name(&entry, namebuf, sizeof(namebuf));
+
         printf("[%s] %-12s first=%u length=%lu\n",
                entry.attribute == 0 ? "DIR " : "FILE",
                namebuf,
                entry.first,
                entry.length);
+
         has_output = 1;
     }
 
@@ -439,7 +415,7 @@ void my_cd(char *dirname) {
     useropen *curdir;
     useropen olddir;
     fcb target;
-    fcb parent_dot;
+    fcb target_dot;
     fcb parent_dotdot;
     int diroff = 0;
     char next_path[DIRLEN];
@@ -457,37 +433,49 @@ void my_cd(char *dirname) {
     curdir = &openfilelist[curdirid];
     memcpy(&olddir, curdir, sizeof(useropen));
 
-    /* cd . 直接不动 */
+    /* cd . 不切换 */
     if (strcmp(dirname, ".") == 0) {
         return;
     }
 
-    /* 根目录下 cd ..，保持不动 */
+    /* 根目录下 cd .. 不切换 */
     if (strcmp(dirname, "..") == 0 && strcmp(curdir->dir, "~/") == 0) {
         return;
     }
 
-    /* 在当前目录中查找目标目录项 */
-    if (find_subdir_in_dir(olddir.first, olddir.open_fcb.length, dirname, &target, &diroff) != 0) {
+    /* 在当前目录中查找目标目录，包括普通子目录和 .. */
+    if (find_subdir_in_dir(olddir.first,
+                           olddir.open_fcb.length,
+                           dirname,
+                           &target,
+                           &diroff) != 0) {
         printf("目录不存在: %s\n", dirname);
         return;
     }
 
-    /* 构造切换后的路径 */
     build_next_dir_path(olddir.dir, dirname, next_path, sizeof(next_path));
 
     /*
-     * 如果是 cd ..，不要直接使用当前目录中的 .. 项作为父目录完整 FCB，
-     * 而是根据 .. 项中的 first 找到父目录块，再读取父目录真正的 . 项。
+     * 关键修复：
+     * 不管是 cd 子目录，还是 cd ..，
+     * 都不要直接信任当前目录项 target.length。
+     *
+     * 因为父目录中保存的子目录 FCB 可能是旧的，
+     * 例如 testdir 中创建 inner 后，
+     * 根目录里的 testdir.length 可能仍然是 80。
+     *
+     * 所以这里统一读取目标目录自己的 "." 项，
+     * 用 "." 项中的 length 作为目标目录最新长度。
      */
-    if (strcmp(dirname, "..") == 0) {
-        if (read_dir_entry_by_index(target.first, 0, &parent_dot) != 0 || !is_valid_fcb(&parent_dot)) {
-            printf("父目录状态异常。\n");
-            return;
-        }
-        target = parent_dot;
-        diroff = 0;
+    if (read_dir_entry_by_index(target.first, 0, &target_dot) != 0 ||
+        !is_valid_fcb(&target_dot)) {
+        printf("目标目录状态异常。\n");
+        return;
     }
+
+    target.length = target_dot.length;
+    target.time = target_dot.time;
+    target.date = target_dot.date;
 
     /*
      * 原地覆写当前目录打开项
@@ -509,13 +497,11 @@ void my_cd(char *dirname) {
     curdir->count = 0;
     curdir->fcbstate = 0;
     curdir->topenfile = 1;
+
     memcpy(&curdir->open_fcb, &target, sizeof(fcb));
 
     /*
-     * 设置父目录块号 dirno：
-     * - 普通进入子目录：父目录就是 olddir.first
-     * - cd ..：现在 target 已经是“父目录真正的 . 项”
-     *          需要再读取它的 .. 项来得到祖父目录块号
+     * 设置当前目录的父目录块号 dirno
      */
     if (strcmp(dirname, "..") == 0) {
         if (read_dir_entry_by_index(target.first, 1, &parent_dotdot) == 0 &&
@@ -549,13 +535,11 @@ void my_mkdir(char *dirname) {
         return;
     }
 
-    /* 不允许创建特殊目录名 */
     if (strcmp(dirname, ".") == 0 || strcmp(dirname, "..") == 0) {
         printf("不能创建特殊目录 %s\n", dirname);
         return;
     }
 
-    /* 目录名长度限制：filename[8]，最多放 7 个字符 + '\0' */
     if (strlen(dirname) >= sizeof(newdir.filename)) {
         printf("目录名过长，最多 7 个字符。\n");
         return;
@@ -563,27 +547,31 @@ void my_mkdir(char *dirname) {
 
     curdir = &openfilelist[curdirid];
 
-    /* 同名检查：文件和目录都不能重名 */
-    if (find_entry_in_dir(curdir->first, curdir->length, dirname, &exist, NULL) == 0) {
+    if (find_entry_in_dir(curdir->first,
+                          curdir->open_fcb.length,
+                          dirname,
+                          &exist,
+                          NULL) == 0) {
         printf("已存在同名文件或目录: %s\n", dirname);
         return;
     }
 
-    /* 申请一个新盘块作为新目录的数据块 */
     newblk = allocBlock();
     if (newblk < 0) {
         printf("磁盘空间不足，无法创建目录。\n");
         return;
     }
 
-    /* 新目录自身的目录项 */
+    /* 新目录自身的 FCB */
     fcb_init(&newdir, dirname, (unsigned short)newblk, 0);
 
-    /* 初始化新目录内容：. 和 .. */
-    /* 初始化新目录内容：. 和 .. */
+    /* 初始化新目录中的 "." */
     fcb_init(&dot, ".", (unsigned short)newblk, 0);
 
-    /* 直接复制父目录当前 FCB，作为 .. 项 */
+    /*
+     * 初始化新目录中的 ".."。
+     * 这里复制当前目录最新 open_fcb，保证父目录 first 和 length 尽量保持最新。
+     */
     dotdot = curdir->open_fcb;
     strcpy(dotdot.filename, "..");
     memset(dotdot.exname, 0, sizeof(dotdot.exname));
@@ -592,43 +580,49 @@ void my_mkdir(char *dirname) {
     memcpy(blockaddr[newblk], &dot, sizeof(fcb));
     memcpy(blockaddr[newblk] + sizeof(fcb), &dotdot, sizeof(fcb));
 
-    memcpy(blockaddr[newblk], &dot, sizeof(fcb));
-    memcpy(blockaddr[newblk] + sizeof(fcb), &dotdot, sizeof(fcb));
-
-    /* 找父目录中的写入位置 */
-    if (find_free_slot_or_append(curdir->first, curdir->length, &slot_index, &need_append) != 0) {
+    if (find_free_slot_or_append(curdir->first,
+                                 curdir->open_fcb.length,
+                                 &slot_index,
+                                 &need_append) != 0) {
         free_block_chain((unsigned short)newblk);
         printf("父目录写入失败。\n");
         return;
     }
 
-    /* 把新目录项写入父目录 */
     if (write_dir_entry_by_index(curdir->first, slot_index, &newdir, 1) != 0) {
         free_block_chain((unsigned short)newblk);
         printf("父目录空间不足，创建失败。\n");
         return;
     }
 
-    /* 只有追加到目录尾时，父目录 length 才增长 */
     if (need_append) {
         curdir->length += sizeof(fcb);
+        curdir->open_fcb.length = curdir->length;
     }
 
     curdir->fcbstate = 1;
-    curdir->open_fcb.length = curdir->length;
-    /* 把当前目录自身的最新 FCB 同步到 '.' 目录项 */
-{
-    fcb self_fcb = curdir->open_fcb;
-    strcpy(self_fcb.filename, ".");
-    memcpy(blockaddr[curdir->first], &self_fcb, sizeof(fcb));
 
-    /* 如果当前目录是根目录，'..' 也指向自己，可一并同步 */
-    if (curdir->first == 5) {
-        fcb parent_fcb = curdir->open_fcb;
-        strcpy(parent_fcb.filename, "..");
-        memcpy(blockaddr[curdir->first] + sizeof(fcb), &parent_fcb, sizeof(fcb));
+    /*
+     * 同步当前目录自己的 "." 项。
+     * 这样之后 cd .. 或 rmdir 判空时，可以拿到目录最新 length。
+     */
+    {
+        fcb self_fcb = curdir->open_fcb;
+        strcpy(self_fcb.filename, ".");
+        memset(self_fcb.exname, 0, sizeof(self_fcb.exname));
+        memcpy(blockaddr[curdir->first], &self_fcb, sizeof(fcb));
+
+        /*
+         * 根目录的 "." 和 ".." 都指向自己。
+         * 根目录变化时，把 ".." 也同步一下。
+         */
+        if (curdir->first == 5) {
+            fcb parent_fcb = curdir->open_fcb;
+            strcpy(parent_fcb.filename, "..");
+            memset(parent_fcb.exname, 0, sizeof(parent_fcb.exname));
+            memcpy(blockaddr[curdir->first] + sizeof(fcb), &parent_fcb, sizeof(fcb));
+        }
     }
-}
 
     printf("目录创建成功: %s\n", dirname);
 }
@@ -636,6 +630,7 @@ void my_mkdir(char *dirname) {
 void my_rmdir(char *dirname) {
     useropen *curdir;
     fcb target;
+    fcb target_dot;
     fcb empty_entry;
     int index;
 
@@ -649,7 +644,6 @@ void my_rmdir(char *dirname) {
         return;
     }
 
-    /* 不允许删除 . 和 .. */
     if (strcmp(dirname, ".") == 0 || strcmp(dirname, "..") == 0) {
         printf("不能删除特殊目录 %s\n", dirname);
         return;
@@ -657,8 +651,11 @@ void my_rmdir(char *dirname) {
 
     curdir = &openfilelist[curdirid];
 
-    /* 先找到该目录项 */
-    if (find_entry_in_dir(curdir->first, curdir->length, dirname, &target, &index) != 0) {
+    if (find_entry_in_dir(curdir->first,
+                          curdir->open_fcb.length,
+                          dirname,
+                          &target,
+                          &index) != 0) {
         printf("目录不存在: %s\n", dirname);
         return;
     }
@@ -668,22 +665,30 @@ void my_rmdir(char *dirname) {
         return;
     }
 
-    /* 防御：不允许删当前目录本身 */
     if (target.first == curdir->first) {
         printf("不能删除当前目录。\n");
         return;
     }
 
-    /* 目录非空不能删 */
-    if (!dir_is_empty(target.first, target.length)) {
+    /*
+     * 关键修复：
+     * 不能直接使用 target.length 判断目录是否为空。
+     * 因为 target 是父目录中保存的目录项，它的 length 可能是旧值。
+     * 应读取目标目录自己的 "." 项，使用其中最新的 length。
+     */
+    if (read_dir_entry_by_index(target.first, 0, &target_dot) != 0 ||
+        !is_valid_fcb(&target_dot)) {
+        printf("目录状态异常，不能删除: %s\n", dirname);
+        return;
+    }
+
+    if (!dir_is_empty(target.first, target_dot.length)) {
         printf("目录非空，不能删除: %s\n", dirname);
         return;
     }
 
-    /* 释放目录占用的盘块链 */
     free_block_chain(target.first);
 
-    /* 父目录中对应目录项标记为空项 */
     memset(&empty_entry, 0, sizeof(fcb));
     empty_entry.free = 1;
 
@@ -693,7 +698,6 @@ void my_rmdir(char *dirname) {
     }
 
     curdir->fcbstate = 1;
-    curdir->open_fcb.length = curdir->length;
 
     printf("目录删除成功: %s\n", dirname);
 }
