@@ -65,16 +65,15 @@ int allocBlock() {
 // ============================
 void fatFree(int first) {
     unsigned short *fat1 = getFat1();
-
     int cur = first;
     int next;
 
-    while (cur != END) {
+    while (cur != END && cur != FREE) {
         next = fat1[cur];
-        setFat(cur, FREE);  // 标记为空闲
+        setFat(cur, FREE);
+        printf("[FAT] free block: %d\n", cur);
         cur = next;
     }
-    printf("[FAT] free block: %d\n", cur);
 }
 
 // ============================

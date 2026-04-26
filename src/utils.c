@@ -35,6 +35,7 @@ void fcb_init(fcb *file, const char *name, unsigned short first, unsigned char a
         }
         memcpy(file->filename, name, len);
         strncpy(file->exname, dot + 1, sizeof(file->exname) - 1);
+        file->exname[sizeof(file->exname) - 1] = '\0';
     } else {
         strncpy(file->filename, name, sizeof(file->filename) - 1);
     }

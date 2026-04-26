@@ -37,13 +37,15 @@ static int find_file(unsigned short dir_first, unsigned long length,
 int my_create(char *filename) {
     useropen *cur = &openfilelist[curdirid];
     fcb newfile;
+    int blk;
+    int index;
 
     if (find_file(cur->first, cur->length, filename, NULL, NULL) == 0) {
         printf("文件已存在\n");
         return -1;
     }
 
-    int blk = allocBlock();
+    blk = allocBlock();
     if (blk < 0) {
         printf("磁盘已满\n");
         return -1;
@@ -51,16 +53,32 @@ int my_create(char *filename) {
 
     fcb_init(&newfile, filename, blk, 1);
 
-    int index = cur->length / sizeof(fcb);
+    /* 先简单按目录尾追加 */
+    index = cur->length / sizeof(fcb);
     memcpy(blockaddr[cur->first] + index * sizeof(fcb), &newfile, sizeof(fcb));
 
+    /* 更新当前目录长度 */
     cur->length += sizeof(fcb);
+    cur->open_fcb.length = cur->length;
     cur->fcbstate = 1;
 
-    printf("创建成功\n");
-    return my_open(filename);  // 创建后直接打开
-}
+    /* 把当前目录自己的最新 FCB 同步到 '.' 目录项 */
+    {
+        fcb self_fcb = cur->open_fcb;
+        strcpy(self_fcb.filename, ".");
+        memcpy(blockaddr[cur->first], &self_fcb, sizeof(fcb));
 
+        /* 根目录的 '..' 也指向自己，顺手同步 */
+        if (cur->first == 5) {
+            fcb parent_fcb = cur->open_fcb;
+            strcpy(parent_fcb.filename, "..");
+            memcpy(blockaddr[cur->first] + sizeof(fcb), &parent_fcb, sizeof(fcb));
+        }
+    }
+
+    printf("创建成功\n");
+    return my_open(filename);  /* 创建后直接打开 */
+}
 /* ===================== 2. 删除文件 ===================== */
 
 void my_rm(char *filename) {
@@ -68,7 +86,7 @@ void my_rm(char *filename) {
     fcb target;
     int index;
 
-    if (find_file(cur->first, cur->length, filename, &target, &index) != 0) {
+    if (find_file(cur->first, cur->open_fcb.length, filename, &target, &index) != 0) {
         printf("文件不存在\n");
         return;
     }
@@ -87,13 +105,12 @@ void my_rm(char *filename) {
 }
 
 /* ===================== 3. 打开文件 ===================== */
-
 int my_open(char *filename) {
     useropen *cur = &openfilelist[curdirid];
     fcb target;
     int index;
 
-    if (find_file(cur->first, cur->length, filename, &target, &index) != 0) {
+    if (find_file(cur->first, cur->open_fcb.length, filename, &target, &index) != 0) {
         printf("文件不存在\n");
         return -1;
     }
@@ -126,6 +143,8 @@ void my_close(int fd) {
     useropen *file = &openfilelist[fd];
 
     if (file->fcbstate == 1) {
+        file->open_fcb.length = file->length;
+
         memcpy(blockaddr[file->dirno] + file->diroff,
                &file->open_fcb, sizeof(fcb));
     }

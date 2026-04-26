@@ -14,7 +14,7 @@
 
 typedef struct FCB {
     char filename[8];
-    char exname[3];
+    char exname[4];
     unsigned char attribute;   // 0:目录文件 1:数据文件
     unsigned short time;
     unsigned short date;
@@ -29,7 +29,7 @@ typedef struct FAT {
 
 typedef struct USEROPEN {
     char filename[8];
-    char exname[3];
+    char exname[4];
     unsigned char attribute;
     unsigned short time;
     unsigned short date;
