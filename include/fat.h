@@ -4,7 +4,7 @@
 int getFreeFatid();
 void setFat(int id, int value);
 int getNextFat(int id);
-int allocBlock();
+int allocBlock(void);
 void freeFatChain(int first);
 void fatFree(int first);
 

@@ -1,5 +1,5 @@
 #include "dir.h"
-
+#include "fat.h"
 /*
  * 这些辅助函数只服务目录模块，因此放在 dir.c 内部即可，
  * 不修改公共头文件，不暴露给其他模块。
@@ -201,20 +201,20 @@ static int get_entries_per_block(void) {
 }
 
 /* 在 FAT 中申请一个空闲盘块，成功返回块号，失败返回 -1 */
-static int alloc_free_block(void) {
-    int i;
+// static int alloc_free_block(void) {
+//     int i;
 
-    for (i = 6; i < BLOCKNUM; i++) {
-        if (fat1[i].id == FREE) {
-            fat1[i].id = END;
-            fat2[i].id = END;
-            memset(blockaddr[i], 0, BLOCKSIZE);
-            return i;
-        }
-    }
+//     for (i = 6; i < BLOCKNUM; i++) {
+//         if (fat1[i].id == FREE) {
+//             fat1[i].id = END;
+//             fat2[i].id = END;
+//             memset(blockaddr[i], 0, BLOCKSIZE);
+//             return i;
+//         }
+//     }
 
-    return -1;
-}
+//     return -1;
+// }
 
 /* 释放从 first 开始的一条 FAT 链 */
 static void free_block_chain(unsigned short first) {
@@ -267,7 +267,7 @@ static int write_dir_entry_by_index(unsigned short dir_first, int index, const f
                 return -1;
             }
 
-            newblk = alloc_free_block();
+            newblk = allocBlock();
             if (newblk < 0) {
                 return -1;
             }
@@ -439,6 +439,7 @@ void my_cd(char *dirname) {
     useropen *curdir;
     useropen olddir;
     fcb target;
+    fcb parent_dot;
     fcb parent_dotdot;
     int diroff = 0;
     char next_path[DIRLEN];
@@ -466,18 +467,30 @@ void my_cd(char *dirname) {
         return;
     }
 
-    /* 当前目录中查找目标目录，兼容 ".." */
-    if (find_subdir_in_dir(olddir.first, olddir.length, dirname, &target, &diroff) != 0) {
+    /* 在当前目录中查找目标目录项 */
+    if (find_subdir_in_dir(olddir.first, olddir.open_fcb.length, dirname, &target, &diroff) != 0) {
         printf("目录不存在: %s\n", dirname);
         return;
     }
 
+    /* 构造切换后的路径 */
     build_next_dir_path(olddir.dir, dirname, next_path, sizeof(next_path));
 
     /*
-     * 直接原地覆写当前目录打开项，避免影响其他尚未完成模块。
-     * first 取目标目录起始块号
-     * dirno 表示“当前目录的父目录起始块号”
+     * 如果是 cd ..，不要直接使用当前目录中的 .. 项作为父目录完整 FCB，
+     * 而是根据 .. 项中的 first 找到父目录块，再读取父目录真正的 . 项。
+     */
+    if (strcmp(dirname, "..") == 0) {
+        if (read_dir_entry_by_index(target.first, 0, &parent_dot) != 0 || !is_valid_fcb(&parent_dot)) {
+            printf("父目录状态异常。\n");
+            return;
+        }
+        target = parent_dot;
+        diroff = 0;
+    }
+
+    /*
+     * 原地覆写当前目录打开项
      */
     useropen_init(curdir, target.first, olddir.first, next_path);
 
@@ -499,16 +512,16 @@ void my_cd(char *dirname) {
     memcpy(&curdir->open_fcb, &target, sizeof(fcb));
 
     /*
-     * 处理父目录块号：
-     * 1. 进入普通子目录时，新目录的父目录就是 olddir.first
-     * 2. cd .. 时，结果目录的父目录应是“祖父目录”
+     * 设置父目录块号 dirno：
+     * - 普通进入子目录：父目录就是 olddir.first
+     * - cd ..：现在 target 已经是“父目录真正的 . 项”
+     *          需要再读取它的 .. 项来得到祖父目录块号
      */
     if (strcmp(dirname, "..") == 0) {
         if (read_dir_entry_by_index(target.first, 1, &parent_dotdot) == 0 &&
             is_valid_fcb(&parent_dotdot)) {
             curdir->dirno = parent_dotdot.first;
         } else {
-            /* 保底：如果读取失败，至少让它指向自己 */
             curdir->dirno = target.first;
         }
     } else {
@@ -557,7 +570,7 @@ void my_mkdir(char *dirname) {
     }
 
     /* 申请一个新盘块作为新目录的数据块 */
-    newblk = alloc_free_block();
+    newblk = allocBlock();
     if (newblk < 0) {
         printf("磁盘空间不足，无法创建目录。\n");
         return;
@@ -567,8 +580,17 @@ void my_mkdir(char *dirname) {
     fcb_init(&newdir, dirname, (unsigned short)newblk, 0);
 
     /* 初始化新目录内容：. 和 .. */
+    /* 初始化新目录内容：. 和 .. */
     fcb_init(&dot, ".", (unsigned short)newblk, 0);
-    fcb_init(&dotdot, "..", curdir->first, 0);
+
+    /* 直接复制父目录当前 FCB，作为 .. 项 */
+    dotdot = curdir->open_fcb;
+    strcpy(dotdot.filename, "..");
+    memset(dotdot.exname, 0, sizeof(dotdot.exname));
+    dotdot.attribute = 0;
+
+    memcpy(blockaddr[newblk], &dot, sizeof(fcb));
+    memcpy(blockaddr[newblk] + sizeof(fcb), &dotdot, sizeof(fcb));
 
     memcpy(blockaddr[newblk], &dot, sizeof(fcb));
     memcpy(blockaddr[newblk] + sizeof(fcb), &dotdot, sizeof(fcb));

@@ -19,15 +19,15 @@ static unsigned short *getFat2() {
 int getFreeFatid() {
     unsigned short *fat1 = getFat1();
 
-    // 从数据区开始找（前面是系统区）
-    for (int i = 6; i < SIZE / BLOCKSIZE; i++) {
+    for (int i = 6; i < BLOCKNUM; i++) {
         if (fat1[i] == FREE) {
-	    printf("[FAT] find tree block: %d\n", i);
+            printf("[FAT] find free block: %d\n", i);
             return i;
         }
     }
-    return -1;  // 没有空闲块
+    return -1;
 }
+
 
 // ============================
 // 2. 设置 FAT 表项（同步 FAT1 和 FAT2）
